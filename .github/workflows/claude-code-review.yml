@@ -131,14 +131,26 @@ jobs:
             exit 1
           fi
 
-      # Simulated Analyze step (sdks runs review-cli agents here with the
-      # checked-out PR tree as CWD and these secrets in env).
-      - name: Analyze (simulated)
+      # === mirrors sdks' "Pre — running sticky placeholder" step: invokes the
+      # binary at the path the composite action output, with GITHUB_TOKEN ===
+      - name: Pre — running sticky placeholder
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ needs.triage.outputs.pr_number }}
+          REVIEW_CLI_BIN: ${{ steps.install-review-cli.outputs.bin-path }}
+        run: '"$REVIEW_CLI_BIN/review-cli" post "$PR_NUMBER" --repo "$GH_REPO" --pre'
+
+      # === mirrors sdks' "Analyze" step: same binary, now with all secrets ===
+      - name: Analyze
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           DD_API_KEY: ${{ secrets.DD_API_KEY }}
           GH_REPO: ${{ github.repository }}
           PR_NUMBER: ${{ needs.triage.outputs.pr_number }}
+          REVIEW_CLI_BIN: ${{ steps.install-review-cli.outputs.bin-path }}
         run: |
-          echo "[rig] analyze would run agents here against $(git rev-parse HEAD)"
+          echo "[rig] analyze invokes review-cli at: $REVIEW_CLI_BIN"
+          "$REVIEW_CLI_BIN/review-cli" review "$PR_NUMBER" --repo "$GH_REPO" --trigger-source "$GITHUB_EVENT_NAME"
