@@ -1,0 +1,144 @@
+name: PR Review
+
+# RIG REPLICA of Uniswap/sdks .github/workflows/claude-code-review.yml @ main (2026-08-13).
+# Structure, triggers, job gates, permissions, checkout ref, and the local
+# composite-action call are copied 1:1. The ONLY substitution: the gate step
+# `review-cli triage --from-github-actions --skip-config` (private package,
+# cannot install on the rig) is replaced by a 20-line shell gate that emits
+# the SAME outputs (run/pr_number/comment_id/trigger_source) a passing
+# triage would. Per Uniswap's own workflow comments in ai-toolkit and
+# uniswap-ai, "review-cli's triage has no fork concept" — i.e. the cli adds
+# no fork check the workflow doesn't already have. sdks' workflow has none.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to review'
+        required: true
+        type: string
+
+concurrency:
+  group: >-
+    review-${{ github.event.pull_request.number || github.event.issue.number || inputs.pr_number }}${{
+      (github.event_name == 'issue_comment' || github.event_name == 'pull_request_review_comment')
+        && !contains(github.event.comment.body, '@request-claude-review')
+        && format('-skip-{0}', github.run_id)
+        || ''
+    }}
+  cancel-in-progress: true
+
+jobs:
+  triage:
+    name: Triage
+    runs-on: ubuntu-latest
+    # === copied verbatim from sdks: NO fork check on the pull_request leg,
+    # === commenter-association (not PR-author) check on the comment legs.
+    if: |
+      (github.event_name == 'pull_request' && !github.event.pull_request.draft) ||
+      (github.event_name == 'issue_comment'
+        && github.event.issue.pull_request != null
+        && contains(github.event.comment.body, '@request-claude-review')
+        && github.event.comment.user.type != 'Bot'
+        && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)) ||
+      (github.event_name == 'pull_request_review_comment'
+        && contains(github.event.comment.body, '@request-claude-review')
+        && github.event.comment.user.type != 'Bot'
+        && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)) ||
+      github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: read
+      packages: read
+      issues: write
+      pull-requests: write
+    outputs:
+      run: ${{ steps.gate.outputs.run }}
+      pr_number: ${{ steps.gate.outputs.pr_number }}
+      comment_id: ${{ steps.gate.outputs.comment_id }}
+      trigger_source: ${{ steps.gate.outputs.trigger_source }}
+    steps:
+      # Stand-in for `review-cli triage --from-github-actions --skip-config`
+      # emitting the same GITHUB_OUTPUT contract. Resolves the PR number from
+      # the event payload (issue_comment: issue.number) exactly like the cli.
+      - name: Decide whether to run (rig gate)
+        id: gate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          PR_NUMBER=$(python3 - <<'PY'
+          import json, os
+          ev = json.load(open(os.environ['GITHUB_EVENT_PATH']))
+          name = os.environ['GITHUB_EVENT_NAME']
+          n = None
+          if name == 'pull_request':
+              n = ev['pull_request']['number']
+          elif name in ('issue_comment', 'pull_request_review_comment'):
+              n = ev.get('issue', {}).get('number') or ev['pull_request']['number']
+          elif name == 'workflow_dispatch':
+              n = ev['inputs']['pr_number']
+          print(n or '')
+          PY
+          )
+          echo "run=true"            >> "$GITHUB_OUTPUT"
+          echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+          echo "trigger_source=$GITHUB_EVENT_NAME" >> "$GITHUB_OUTPUT"
+          COMMENT_ID=$(python3 -c "import json,os; ev=json.load(open(os.environ['GITHUB_EVENT_PATH'])); print(ev.get('comment',{}).get('id',''))")
+          echo "comment_id=$COMMENT_ID" >> "$GITHUB_OUTPUT"
+          echo "[rig-gate] run=true pr_number=$PR_NUMBER event=$GITHUB_EVENT_NAME"
+
+  review:
+    name: AI review
+    needs: triage
+    if: needs.triage.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    # === copied verbatim from sdks (no fork guard anywhere below) ===
+    permissions:
+      contents: write
+      packages: read
+      pull-requests: write
+      issues: write
+    timeout-minutes: 20
+    steps:
+      # === copied verbatim: checkout the PR AUTHOR'S tree ===
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: refs/pull/${{ needs.triage.outputs.pr_number }}/head
+
+      # === copied verbatim: run the composite action FROM THE PR TREE ===
+      - name: Install review-cli
+        id: install-review-cli
+        uses: ./.github/actions/install_review_cli
+        with:
+          version: "1.6.0"
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # === copied verbatim: the secret material the job holds ===
+      - name: Verify Claude OAuth token present
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: |
+          if [ -z "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
+            echo "::error::Set CLAUDE_CODE_OAUTH_TOKEN as a repo secret to enable AI review."
+            exit 1
+          fi
+
+      # Simulated Analyze step (sdks runs review-cli agents here with the
+      # checked-out PR tree as CWD and these secrets in env).
+      - name: Analyze (simulated)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          DD_API_KEY: ${{ secrets.DD_API_KEY }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ needs.triage.outputs.pr_number }}
+        run: |
+          echo "[rig] analyze would run agents here against $(git rev-parse HEAD)"

@@ -1,0 +1,29 @@
+name: 'Install review-cli'
+description: 'Rig stand-in for sdks .github/actions/install_review_cli (composite).'
+
+inputs:
+  version:
+    description: 'version pin'
+    required: true
+  github-token:
+    description: 'token'
+    required: true
+  bun-version:
+    description: 'bun'
+    default: '1.3.13'
+
+outputs:
+  bin-path:
+    description: 'bin dir'
+    value: ${{ steps.install.outputs.bin-path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install @uniswap/review-cli (isolated registry context)
+      id: install
+      shell: bash
+      run: |
+        echo "[base-action] would install @uniswap/review-cli@${{ inputs.version }} here"
+        mkdir -p "$RUNNER_TEMP/review-cli-bin"
+        echo "bin-path=$RUNNER_TEMP/review-cli-bin" >> "$GITHUB_OUTPUT"
